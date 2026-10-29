@@ -1,4 +1,4 @@
-# 只能材料整理系统(Intelligent Material Sorting System, IMSS)
+# 智能材料整理系统(Intelligent Material Sorting System, IMSS)
 
 > 当前项目面向中科大先研院研会活动报销材料整理，暂不支持其他文件整理。
 
