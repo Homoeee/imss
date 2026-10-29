@@ -1,0 +1,26 @@
+{
+  "打印纸发票.pdf": {
+    "category": "物品",
+    "purpose": "活动布置用品",
+    "student_id": "",
+    "phone": "",
+    "signature_image": "",
+    "is_prize": false,
+    "amount_equal": true
+  },
+  "车费发票.pdf": {
+    "category": "行程",
+    "purpose": "活动彩排往返车费",
+    "passenger_name": "张三",
+    "passenger_name_2": "",
+    "passenger_name_3": "",
+    "student_id": "SA12345678",
+    "signature_image": ""
+  },
+  "奖品发票.pdf": {
+    "category": "奖品",
+    "purpose": "活动奖品",
+    "is_prize": true,
+    "amount_equal": true
+  }
+}

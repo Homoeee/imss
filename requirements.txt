@@ -1,0 +1,11 @@
+# Python 3.10+; tested with Python 3.12.14.
+# Install: python -m pip install -r requirements.txt
+Pillow>=10.4,<13
+python-docx>=1.1.2,<2
+pypdfium2>=4.30,<6
+lxml>=4.9,<7
+openpyxl>=3.1.5,<4
+
+# Native components are bundled in this project's vendor/ directory:
+# Tesseract + chi_sim/eng language models for OCR.
+# LibreOffice for Word/PDF conversion. No system-program fallback.

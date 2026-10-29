@@ -1,0 +1,14 @@
+{
+  "tesseract": "",
+  "tessdata": "",
+  "languages": "chi_sim+eng",
+  "soffice": "",
+  "office_backend": "libreoffice",
+  "dpi": 180,
+  "ocr_timeout": 120,
+  "office_timeout": 180,
+  "max_pages": 100,
+  "max_pixels": 40000000,
+  "ocr_min_chars": 20,
+  "workers": 2
+}

@@ -1,0 +1,47 @@
+{
+  "platform": "Windows x64",
+  "prepared_on": "2026-10-23",
+  "python": "Use the project-configured interpreter; no Python runtime is bundled.",
+  "components": [
+    {
+      "name": "Tesseract Windows x64",
+      "version": "5.5.3.20260724",
+      "source": "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe",
+      "archive_or_file": "tesseract-ocr-w64-setup-5.5.3.20260724.exe",
+      "sha256": "bee9e3434bd94fd65387d9be28cd467a41f61b1275383b55b0f59a1331270ae4",
+      "installed_path": "tesseract/"
+    },
+    {
+      "name": "LibreOffice Windows x64",
+      "version": "26.2.6.3",
+      "source": "https://download.documentfoundation.org/libreoffice/stable/26.2.6/win/x86_64/LibreOffice_26.2.6_Win_x86-64.msi",
+      "archive_or_file": "LibreOffice_26.2.6_Win_x86-64.msi",
+      "sha256": "f9877032fd908beb9c0ddf06df4af5c2e85f419c42e14876c4cce5aae5fb2660",
+      "installed_path": "libreoffice/"
+    },
+    {
+      "name": "tessdata_fast chi_sim",
+      "version": "4.1.0",
+      "source": "https://github.com/tesseract-ocr/tessdata_fast/blob/4.1.0/chi_sim.traineddata",
+      "archive_or_file": "chi_sim.traineddata",
+      "sha256": "a5fcb6f0db1e1d6d8522f39db4e848f05984669172e584e8d76b6b3141e1f730",
+      "installed_path": "tesseract/tessdata/chi_sim.traineddata"
+    },
+    {
+      "name": "tessdata_fast eng",
+      "version": "4.1.0",
+      "source": "https://github.com/tesseract-ocr/tessdata_fast/blob/4.1.0/eng.traineddata",
+      "archive_or_file": "eng.traineddata",
+      "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+      "installed_path": "tesseract/tessdata/eng.traineddata"
+    },
+    {
+      "name": "7-Zip extraction tool",
+      "version": "26.05",
+      "source": "https://www.7-zip.org/a/7z2605-x64.exe",
+      "archive_or_file": "7z2605-x64.exe",
+      "sha256": "fd99e86f57d8f429ef5ed045bf98315af962e2309b0f1ba87a147a44c71647d0",
+      "installed_path": null
+    }
+  ]
+}
