@@ -129,7 +129,7 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertIn('活动用纸', '\n'.join(c.text for t in doc.tables for r in t.rows for c in r.cells))
         self.assertEqual(original, {p.name: digest_file(p) for p in self.source.iterdir()})
         self.assertEqual({p.name for p in self.root.iterdir()}, {'input', '报销材料', '核对清单'})
-        self.assertEqual({p.name for p in manifest.parent.iterdir()}, {'核对清单.json', '核对清单.xlsx'})
+        self.assertEqual({p.name for p in manifest.parent.iterdir()}, {'核对清单.json', '核对清单.xlsx', 'detail.json'})
         self.assertEqual({p.name for p in output.iterdir() if p.is_dir()}, {'原始材料'})
         self.assertEqual({p.name for p in (output / '原始材料').iterdir()},
                          {'01.活动用纸-35.80元-电子发票.png', '01.活动用纸-35.80元-购买记录.png'})

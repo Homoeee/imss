@@ -1,7 +1,7 @@
 """唯一程序入口：路径配置、命令参数与交互提示集中于此。"""
 INPUT_DIR = ""
 TEMPLATE = ""
-SIGNATURE_IMAGE = ""  # 开票人签字图片路径；留空则不填签名。
+SIGNATURE_IMAGE = ""  # 承诺人签字图片路径；留空则不填签名。
 STUDENT_ID = ""       # 学号，例如 "SA12345678"。
 PHONE = ""            # 联系方式。
 PASSENGER_NAME = ""   # 行程模板的第 1 位乘车人姓名；不同人员可用 --details 逐组填写。
@@ -75,12 +75,12 @@ def main(argv=None, person_defaults=None):
         command.add_argument("input", type=Path)
         command.add_argument("--template", type=Path)
         command.add_argument("--config", type=Path)
-        command.add_argument("--details", type=Path, help="按发票号或发票原文件名称提供用途、乘车人等信息（仅 run 使用）")
+        command.add_argument("--details", type=Path, help="分类或逐票补充信息；run 默认读取核对清单/detail.json")
         if name == "run":
             command.add_argument("--review", type=Path, help="应用已确认的核对清单（xlsx，兼容 CSV）")
             command.add_argument("--skip-pdf", action="store_true")
             command.add_argument("--start", type=int, default=1, help="报销单连续整数编号起点，默认 01；审查表和新闻稿均为 00")
-            command.add_argument("--signature-image", type=Path, help="开票人签字图片；按比例插入模板签名栏")
+            command.add_argument("--signature-image", type=Path, help="承诺人签字图片；按比例插入模板签名栏")
             command.add_argument("--student-id", help="默认学号；逐组 details 可覆盖")
             command.add_argument("--phone", help="默认联系方式；逐组 details 可覆盖")
             command.add_argument("--passenger-name", help="默认第 1 位乘车人姓名；逐组 details 可覆盖")
@@ -90,7 +90,7 @@ def main(argv=None, person_defaults=None):
     command.add_argument("--review", type=Path, help="旧 JSON 入口可指定核对表；直接传入 Excel 时无需此参数")
     command.add_argument("--template", type=Path)
     command.add_argument("--config", type=Path, help="覆盖扫描时的运行配置")
-    command.add_argument("--details", type=Path, help="逐笔信息 JSON，键为发票号或 A 列发票原文件名称；参考 details.example.json")
+    command.add_argument("--details", type=Path, help="覆盖自动读取的核对清单/detail.json；支持发票类别或逐票字段")
     command.add_argument("--skip-pdf", action="store_true")
     command.add_argument("--start", type=int, default=1, help="报销单连续整数编号起点，默认 01")
     command.add_argument("--signature-image", type=Path)
@@ -166,6 +166,7 @@ def main(argv=None, person_defaults=None):
         if args.command in ("scan", "run"):
             manifest = scan(args.input, default_output(args.input), settings, args.template)
             print(f"核对清单: {manifest.parent / '核对清单.xlsx'}")
+            print(f"分类人员信息：{manifest.parent / 'detail.json'}（未填写的类别留空）")
             print(f'修改并保存、关闭 Excel 后执行：python main.py build "{manifest.parent / "核对清单.xlsx"}"')
             if args.command == "scan":
                 return 0

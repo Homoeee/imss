@@ -24,11 +24,11 @@ def validate_signature(path: Path):
         image.verify()
 
 
-def replace_signature(paragraph, path: Path | None):
-    if not re.search(r'{{\s*signature_image\s*}}', paragraph.text):
+def replace_signature(paragraph, path: Path | None, field='signature_image'):
+    if not re.search(r'{{\s*' + re.escape(field) + r'\s*}}', paragraph.text):
         return
     marker = '\ufffc'
-    replace_fields(paragraph, {'signature_image': marker if path else ''})
+    replace_fields(paragraph, {field: marker if path else ''})
     if not path:
         return
     with Image.open(path) as image:
@@ -50,6 +50,14 @@ def replace_signature(paragraph, path: Path | None):
                 tail._r.insert(0, deepcopy(run._r.rPr))
             picture._r.addnext(tail._r)
             previous = tail
+
+
+def append_placeholder(paragraph, field):
+    """新增占位符沿用标签字号，防止同行人的学号被默认样式放大。"""
+    previous = paragraph.runs[-1] if paragraph.runs else None
+    run = paragraph.add_run('{{' + field + '}}')
+    if previous is not None and previous._r.rPr is not None:
+        run._r.insert(0, deepcopy(previous._r.rPr))
 
 
 def paragraphs_in(container):
@@ -119,15 +127,28 @@ def build_document(bundle: Bundle, sequence: str, template: Path | None, destina
     details = details or {}
     bundle = Bundle(bundle.key, bundle.item, bundle.amount,
                     [m for m in bundle.materials if m.kind not in STANDALONE_SHEETS], bundle.issues)
-    signature = Path(details['signature_image']) if details.get('signature_image') else None
-    if signature:
-        validate_signature(signature)
+    signatures = {}
+    for field in ('signature_image', 'signature_image_2', 'signature_image_3'):
+        signatures[field] = Path(details[field]) if details.get(field) else None
+        if signatures[field]:
+            validate_signature(signatures[field])
+    builtin = not template
     if not template:
         category = details.get("category") or next((m.category for m in bundle.materials if m.kind == "电子发票"), "物品") or "物品"
         derived = Path(__file__).resolve().parents[1] / "resources" / "templates" / (category + ".docx")
         if derived.is_file():
             template = derived
     document = Document(template) if template else Document()
+    if builtin and category == '行程' and document.tables:
+        # 内置表保留三行布局，为同行人的原空栏补占位符。
+        declaration = document.tables[-1]
+        for index in (1, 2):
+            for paragraph in declaration.cell(index, 0).paragraphs:
+                if '签名：' in paragraph.text and '{{signature_image' not in paragraph.text:
+                    append_placeholder(paragraph, 'signature_image_' + str(index + 1))
+            for paragraph in declaration.cell(index, 3).paragraphs:
+                if '学号：' in paragraph.text and '{{student_id' not in paragraph.text:
+                    append_placeholder(paragraph, 'student_id_' + str(index + 1))
     if not template:
         section = document.sections[0]
         section.page_width, section.page_height = Mm(210), Mm(297)
@@ -148,6 +169,7 @@ def build_document(bundle: Bundle, sequence: str, template: Path | None, destina
               "phone": details.get("phone", ""), "actual_amount": details.get("actual_amount", ""),
               "prize_yes": "☑" if prize is True else "□", "prize_no": "☑" if prize is False else "□",
               "equal_yes": "☑" if equal is True else "□", "equal_no": "☑" if equal is False else "□"}
+    fields.update({key: details.get(key, '') for key in ('student_id_2', 'student_id_3')})
     containers = [document]
     for section in document.sections:
         containers.extend([section.header, section.footer, section.first_page_header, section.first_page_footer,
@@ -155,7 +177,8 @@ def build_document(bundle: Bundle, sequence: str, template: Path | None, destina
     for container in containers:
         for paragraph in paragraphs_in(container):
             replace_fields(paragraph, fields)
-            replace_signature(paragraph, signature)
+            for field, signature in signatures.items():
+                replace_signature(paragraph, signature, field)
     panels = [(p, p.text.strip()) for p in paragraphs_in(document) if p.text.strip() in ("{{invoice_panel}}", "{{evidence_panel}}")]
     if panels:
         if sorted(text for _, text in panels) != ['{{evidence_panel}}', '{{invoice_panel}}']:

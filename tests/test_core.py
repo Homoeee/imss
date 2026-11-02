@@ -322,7 +322,7 @@ class FileTests(unittest.TestCase):
             self.assertEqual(len(list((output / '原始材料').glob('*元-*'))), 2)
             self.assertEqual({p.name for p in output.iterdir() if p.is_dir()}, {'原始材料'})
             self.assertEqual({p.name for p in output.parent.iterdir()}, {'input', '报销材料', '核对清单'})
-            self.assertEqual({p.name for p in report_path.parent.iterdir()}, {'核对清单.json', '核对清单.xlsx'})
+            self.assertEqual({p.name for p in report_path.parent.iterdir()}, {'核对清单.json', '核对清单.xlsx', 'detail.json'})
             self.assertEqual(main(['scan', str(source)]), 0)
             self.assertFalse(any(output.iterdir()))
             rescanned = json.loads(report_path.read_text(encoding='utf-8'))

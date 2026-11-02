@@ -176,3 +176,120 @@ class FormFieldsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, field + ' 必须是字符串'):
                     build(manifest, skip_pdf=True, details_path=details)
                 self.assertFalse(any((self.root / '报销材料').iterdir()))
+
+    def test_category_file_generated_and_automatically_reloaded(self):
+        manifest = self.make_scan()
+        path = manifest.parent / 'detail.json'
+        fields = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(set(fields), {'物品', '奖品', '工作餐', '行程', '快递'})
+        self.assertEqual(fields['物品']['signature_image'], '')
+        fields['物品'].update(student_id='CATEGORY-ID', phone='CATEGORY-PHONE',
+                             signature_image='../signature.png')
+        fields['行程']['student_id'] = 'UNRELATED-ID'
+        path.write_text(json.dumps(fields), encoding='utf-8')
+        for phone in ('CATEGORY-PHONE', 'UPDATED-PHONE'):
+            fields['物品']['phone'] = phone
+            path.write_text(json.dumps(fields), encoding='utf-8')
+            report = build(manifest, skip_pdf=True)
+            self.assertEqual(report['details_file'], str(path.resolve()))
+            document = Document(Path(report['output']) / report['generated'][0]['word'])
+            text = '\n'.join(p.text for t in document.tables for r in t.rows for c in r.cells for p in c.paragraphs)
+            self.assertIn('CATEGORY-ID', text)
+            self.assertIn(phone, text)
+            self.assertNotIn('UNRELATED-ID', text)
+            self.assertTrue(document.tables[-1].cell(0, 0)._tc.xpath('.//a:blip'))
+        from imss.workflow import update_review, recheck
+        before = path.read_bytes()
+        update_review(manifest)
+        with patch('imss.workflow.extract', return_value=('电子发票', [])):
+            recheck(manifest)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_multiple_passengers_have_individual_signatures_and_ids(self):
+        manifest = self.make_scan(travel=True)
+        fields = {'行程': {'passengers': [
+            {'name': name, 'student_id': f'ID-{index}', 'signature_image': '../signature.png'}
+            for index, name in enumerate(('张三', '李四', '王五'))]}}
+        path = manifest.parent / 'detail.json'
+        path.write_text(json.dumps(fields), encoding='utf-8')
+        report = build(manifest, skip_pdf=True)
+        self.assertFalse(report['pending'])
+        declaration = Document(Path(report['output']) / report['generated'][0]['word']).tables[-1]
+        for index, name in enumerate(('张三', '李四', '王五')):
+            self.assertIn(name, declaration.cell(index, 0).text)
+            self.assertIn(f'ID-{index}', declaration.cell(index, 3).text)
+            self.assertEqual(len(declaration.cell(index, 0)._tc.xpath('.//a:blip')), 1)
+        # 更新后少一人，旧的第三位信息不会残留。
+        fields['行程']['passengers'].pop()
+        path.write_text(json.dumps(fields), encoding='utf-8')
+        report = build(manifest, skip_pdf=True)
+        declaration = Document(Path(report['output']) / report['generated'][0]['word']).tables[-1]
+        self.assertNotIn('王五', declaration.cell(2, 0).text)
+        self.assertFalse(declaration.cell(2, 0)._tc.xpath('.//a:blip'))
+        self.assertNotIn('ID-2', declaration.cell(2, 3).text)
+
+    def test_travel_purpose_is_loaded_and_original_promise_is_preserved(self):
+        manifest = self.make_scan(travel=True)
+        path = manifest.parent / 'detail.json'
+        fields = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(fields['行程']['purpose'], '')
+        self.assertNotIn('promise_image', fields['行程'])
+        promise = Path(__file__).resolve().parents[1] / 'imss/resources/templates/承诺不重复报销.png'
+        fields['行程'].update(purpose='活动负责人前往高新校区参与活动筹备往返',
+                             signature_image='../signature.png')
+        path.write_text(json.dumps(fields), encoding='utf-8')
+        report = build(manifest, skip_pdf=True)
+        self.assertFalse(report['pending'])
+        document = Document(Path(report['output']) / report['generated'][0]['word'])
+        declaration = document.tables[-1]
+        self.assertIn(fields['行程']['purpose'], declaration.cell(3, 1).text)
+        promise_ids = declaration.cell(4, 3)._tc.xpath('.//a:blip/@r:embed')
+        self.assertEqual(len(promise_ids), 1)
+        self.assertEqual(document.part.related_parts[promise_ids[0]].blob, promise.read_bytes())
+        person_id = declaration.cell(0, 0)._tc.xpath('.//a:blip/@r:embed')[0]
+        self.assertEqual(document.part.related_parts[person_id].blob, self.signature.read_bytes())
+        fields['行程']['purpose'] = ''
+        path.write_text(json.dumps(fields), encoding='utf-8')
+        report = build(manifest, skip_pdf=True)
+        document = Document(Path(report['output']) / report['generated'][0]['word'])
+        declaration = document.tables[-1]
+        self.assertEqual(declaration.cell(3, 1).text, '')
+        promise_id = declaration.cell(4, 3)._tc.xpath('.//a:blip/@r:embed')[0]
+        original = Path(__file__).resolve().parents[1] / 'imss/resources/templates/承诺不重复报销.png'
+        self.assertEqual(document.part.related_parts[promise_id].blob, original.read_bytes())
+
+    def test_invalid_travel_purpose_fails_before_publishing(self):
+        manifest = self.make_scan(travel=True)
+        path = manifest.parent / 'detail.json'
+        for fields in ({'purpose': 123}, {'purpose': []}):
+            with self.subTest(fields=fields):
+                path.write_text(json.dumps({'行程': fields}), encoding='utf-8')
+                with self.assertRaises(ValueError):
+                    build(manifest, skip_pdf=True)
+                self.assertFalse(any((self.root / '报销材料').iterdir()))
+
+    def test_category_does_not_fill_other_categories_and_invoice_wins(self):
+        manifest = self.make_scan()
+        path = manifest.parent / 'detail.json'
+        path.write_text(json.dumps({'行程': {'student_id': 'TRAVEL-ID'}}), encoding='utf-8')
+        report = build(manifest, skip_pdf=True)
+        document = Document(Path(report['output']) / report['generated'][0]['word'])
+        self.assertNotIn('TRAVEL-ID', document.tables[-1].cell(0, 2).text)
+        self.assertFalse(document.tables[-1].cell(0, 0)._tc.xpath('.//a:blip'))
+        path.write_text(json.dumps({'物品': {'student_id': 'CATEGORY-ID'},
+                                    '0.png': {'student_id': 'INVOICE-ID'}}), encoding='utf-8')
+        report = build(manifest, skip_pdf=True)
+        document = Document(Path(report['output']) / report['generated'][0]['word'])
+        self.assertIn('INVOICE-ID', document.tables[-1].cell(0, 2).text)
+        self.assertNotIn('CATEGORY-ID', document.tables[-1].cell(0, 2).text)
+
+    def test_invalid_passenger_list_fails_before_publishing(self):
+        manifest = self.make_scan()
+        path = manifest.parent / 'detail.json'
+        for passengers in ('张三', [{}] * 4, ['张三'], [{'student_id': 123}],
+                           [{'signature_image': 'missing.png'}]):
+            with self.subTest(passengers=passengers):
+                path.write_text(json.dumps({'行程': {'passengers': passengers}}), encoding='utf-8')
+                with self.assertRaises(ValueError):
+                    build(manifest, skip_pdf=True)
+                self.assertFalse(any((self.root / '报销材料').iterdir()))

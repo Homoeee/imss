@@ -8,7 +8,8 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from imss.output.documents import build_document, validate_signature
+from imss.output.documents import build_document
+from imss.details import DETAIL_NAME, ensure_details, load_details, expand_passengers
 from imss.recognition.extract import IMAGE_EXTENSIONS, detect_extension, extract, image_pages
 from imss.core.matching import group_materials
 from imss.storage import digest_file, validate_sources, write_json
@@ -125,6 +126,7 @@ def scan(root: Path, output: Path | None, settings: Settings, template: Path | N
                           "template": str(template.resolve()) if template else None,
                           "settings": settings.__dict__, "materials": [m.to_dict() for m in records]})
     write_review(records_output / "核对清单.xlsx", records, root)
+    ensure_details(records_output)
     return manifest
 
 
@@ -191,6 +193,7 @@ def recheck(manifest_path: Path, settings_override: Settings | None = None) -> d
     write_review(review, records, root, states=states)
     data.update(materials=[m.to_dict() for m in records], settings=settings.__dict__)
     write_json(manifest_path, data)
+    ensure_details(processing)
     return dict(materials=len(records), candidates=len(proposals),
                 unique_candidates=sum(p['status'] == '双方唯一候选' for p in proposals),
                 confirmed=len(confirmed_sources))
@@ -220,6 +223,7 @@ def update_review(manifest_path: Path):
     else:
         states = None
     write_review(path, records, root, states=states)
+    ensure_details(processing)
     return path
 
 
@@ -309,6 +313,9 @@ def build(manifest_path: Path, review: Path | None = None, template: Path | None
         raise ValueError('核对清单必须位于原目录；移动材料后请重新扫描')
     if not output.is_dir():
         raise ValueError('报销材料目录不存在，请恢复原目录')
+    if details_path is None:
+        candidate = processing / DETAIL_NAME
+        details_path = candidate if candidate.exists() else None
     previous = data.get('report', {}).get('files', {})
     for name, digest in previous.items():
         path = managed_path(output, name)
@@ -369,32 +376,8 @@ def _build_into(data, records, root, output, records_output, review, template,
         raise ValueError("找不到有效的 .docx 模板")
     if any(m.kind not in KINDS for m in records):
         raise ValueError("扫描结果含未知类型，请使用核对清单编辑")
-    details = json.loads(details_path.read_text(encoding='utf-8-sig')) if details_path else {}
-    if not isinstance(details, dict) or any(not isinstance(value, dict) for value in details.values()):
-        raise ValueError("details 文件必须是分组代号或发票号到字段对象的映射")
     person_defaults = dict(person_defaults or {})
-    if set(person_defaults) - {'student_id', 'phone', 'signature_image', 'passenger_name'}:
-        raise ValueError("默认人员信息只支持 student_id、phone、signature_image、passenger_name")
-    allowed = {'category', 'purpose', 'student_id', 'phone', 'invoice_number', 'is_prize', 'amount_equal', 'actual_amount', 'template', 'signature_image',
-               'passenger_name', 'passenger_name_2', 'passenger_name_3'}
-    for value in [person_defaults, *details.values()]:
-        for field in ('student_id', 'phone', 'signature_image', 'passenger_name', 'passenger_name_2', 'passenger_name_3'):
-            if field in value and not isinstance(value[field], str):
-                raise ValueError(f"{field} 必须是字符串")
-        if value.get('signature_image'):
-            path = Path(value['signature_image']).expanduser()
-            if not path.is_absolute():
-                path = (details_path.parent if value is not person_defaults and details_path else Path.cwd()) / path
-            validate_signature(path)
-            value['signature_image'] = str(path.resolve())
-    for key, value in details.items():
-        if set(value) - allowed:
-            raise ValueError(f"details 中含未知字段: {key}")
-        for flag in ('is_prize', 'amount_equal'):
-            if flag in value and type(value[flag]) is not bool:
-                raise ValueError(f"{key}.{flag} 必须是 true 或 false")
-        if value.get('category', '物品') not in ('物品', '奖品', '工作餐', '行程', '快递'):
-            raise ValueError(f"报销类别无效: {key}")
+    details = load_details(details_path, person_defaults)
     group = group_verified_materials if verified_only else group_materials
     bundles, pending = group([m for m in records if m.kind not in STANDALONE_SHEETS])
     numbering, next_number = bundle_numbers([b for b in bundles if not b.issues], start=start)
@@ -468,16 +451,18 @@ def _build_into(data, records, root, output, records_output, review, template,
         LOGGER.info("生成 %s", destination.name)
         try:
             invoice = next(m for m in bundle.materials if m.kind == '电子发票')
-            fields = {**person_defaults, **details.get(invoice.source, {}),
+            overrides = {**details.get(invoice.source, {}),
                       **details.get(bundle.key.removeprefix('manual:'), {})}
             # 自动组在 Excel 中显示短代号；允许直接复制 G 列作为 details 的键。
             # 同时保留上面的旧版 invoice:<摘要> 键；手工分组不再套用自动组配置。
             if bundle.key.startswith('invoice:') or invoice.group.startswith('reviewed-'):
-                fields.update(details.get('auto-' + invoice.digest[:16], {}))
+                overrides.update(details.get('auto-' + invoice.digest[:16], {}))
             for invoice_id in invoice.invoice_ids:
                 if invoice_id in details:
-                    fields.update(details[invoice_id])
+                    overrides.update(details[invoice_id])
                     break
+            category = overrides.get('category') or invoice.category or '物品'
+            fields = {**person_defaults, **expand_passengers(details.get(category, {})), **expand_passengers(overrides)}
             item_template = template
             if fields.get('template'):
                 item_template = Path(fields['template'])
