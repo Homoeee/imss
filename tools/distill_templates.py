@@ -32,7 +32,7 @@ def set_cell(cell, text):
         extra._element.getparent().remove(extra._element)
 
 
-def distill(source: Path, destination: Path, travel=False, promise_image: Path | None = None):
+def distill(source: Path, destination: Path, travel=False, promise_image: Path | None = None, *, meal=False):
     reference = Document(source)
     document = Document()
     body = document.element.body
@@ -44,7 +44,7 @@ def distill(source: Path, destination: Path, travel=False, promise_image: Path |
         if element.tag in (qn("w:headerReference"), qn("w:footerReference")):
             section.remove(element)
     body.append(deepcopy(reference.tables[0]._element))
-    for marker in ("invoice_panel", "evidence_panel"):
+    for marker in ("invoice_panel", "meal_panel" if meal else "evidence_panel"):
         paragraph = OxmlElement("w:p")
         run = OxmlElement("w:r")
         text = OxmlElement("w:t")
@@ -133,5 +133,5 @@ if __name__ == '__main__':
     for category, prefix in selectors.items():
         source = next(args.reference.glob(prefix + '*.docx'))
         destination = args.destination / (category + '.docx')
-        distill(source, destination, category == '行程', promise_image=promise_image)
+        distill(source, destination, category == '行程', promise_image=promise_image, meal=category == '工作餐')
         print(category, destination)

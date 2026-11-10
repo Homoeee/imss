@@ -32,8 +32,8 @@ python main.py scan "..\本次材料"   # 将所有报销材料放入同一文�
 
 **3. 在审查文件夹 `..\核对清单` 中填写 `detail.json`。**
 
-按“物品、奖品、工作餐、行程、快递”这几种发票类型，填写承诺人的 `signature_image`（签名图片路径）、`student_id`（学号）、`phone`（联系方式）。
-同类别发票共用这些信息，未填写的类别不填充。签名图片路径若填写相对路径，则以 `detail.json` 所在目录为准。
+按“物品、奖品、工作餐、行程、快递”这几种发票类型，填写承诺人的 `signature_image`（签名图片路径）、`student_id`（学号）、`phone`（联系方式）、
+'is_prize'（是否是奖品）。 同类别发票共用这些信息，未填写的类别不填充。签名图片路径若填写相对路径，则以 `detail.json` 所在目录为准。
 
 行程类另填 `purpose`（乘车事由），`passengers` 是乘车人列表，每人一个对象，填写 `name`、`student_id`、`signature_image`；内置行程表支持最多三人。
 格式及示例见 [使用说明](docs/使用说明.md#人员用途和奖品状态)，空白示例见 [details.example.json](details.example.json)。
@@ -45,6 +45,7 @@ python main.py build "..\核对清单\核对清单.xlsx"
 ```
 
 程序自动读取同目录的 `detail.json`，并将对应类别的信息填入报销材料。只处理 Excel 中“已校验”的材料，输出到“报销材料”文件夹。
+内置报销单的 Word 和 PDF 使用同一份核对数据分别生成。PDF 使用 ReportLab 和随项目提供的中文字体，通常排在一张 A4 上。
 
 ## 固定输出结构
 
@@ -56,8 +57,8 @@ python main.py build "..\核对清单\核对清单.xlsx"
 │   │   └── ...
 │   ├── 00.某项目审查表.pdf
 │   ├── 00.某活动新闻稿.pdf
-│   ├── 01.打印纸_35.80.docx
-│   ├── 01.打印纸_35.80.pdf
+│   ├── 01.打印纸_35.80元.docx
+│   ├── 01.打印纸_35.80元.pdf
 │   ├── 02.某活动签领表.pdf
 │   └── 03.某活动签到表.pdf
 │   └── ...
@@ -77,9 +78,8 @@ python main.py run "D:\报销\本次材料"
 python main.py build "D:\报销\核对清单\核对清单.xlsx" --template "D:\模板.docx" --student-id "SA12345678" 
 --phone "13800000000" --signature-image "D:\签字.png"
 
-# 暂时只生成 Word；之后补导出 PDF
+# 暂时只生成报销单 Word；需要 PDF 时移除 --skip-pdf 重新 build
 python main.py build "D:\报销\核对清单\核对清单.xlsx" --skip-pdf
-python main.py export-pdf "D:\报销\报销材料"
 ```
 
 统一签名、学号和联系方式也可在 `main.py` 顶部配置。按类别的人员信息、逐笔用途及奖品勾选见 [详细使用说明](docs/使用说明.md)。
@@ -101,21 +101,22 @@ imss/
 │   ├── fields.py              商品区域、实付金额与订单号提取
 │   ├── layout.py              坐标视觉行、字段位置与证据
 │   └── refine.py              支付/费用区域局部数字 OCR
-├── output/                    Word 与 Excel 输出
+├── output/                    Word、PDF 与 Excel 输出
 │   ├── documents.py           模板填充、附件布局、签字图片
+│   ├── pdf.py                 直接生成内置报销单 PDF
 │   ├── review.py              彩色核对表、人工修改读取与诊断刷新
 │   ├── candidate_review.py    候选工作表、批量确认与冲突检查
 │   └── workspace.py           固定目录约定
 ├── runtime/                   本地组件定位与进程调用
 │   ├── paths.py               vendor 定位和边界校验
-│   └── office.py              LibreOffice 隔离转换
+│   └── process.py             启动项目内 OCR 程序
 ├── resources/templates/       五类单页模板与承诺图片
 ├── storage.py                 JSON、SHA-256 与原件校验
 └── workflow.py                扫描与生成流程编排
 tests/                         业务、核对闭环、输出与真实组件测试
 tools/                         开发工具与离线评测，不参与用户入口
 docs/                          使用、开发和测试说明
-vendor/                        OCR、Office 及其许可证
+vendor/                        OCR 及其许可证
 ```
 
 类型判断在 `recognition/rules.py`；更改配对在 `core/matching.py`；更改清单在 `output/review.py`；更改模板布局在 `output/documents.py`。

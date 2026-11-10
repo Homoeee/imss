@@ -21,16 +21,6 @@ def bundled_tesseract() -> tuple[str, ...]:
     return tuple(str(VENDOR_ROOT / "tesseract" / name) for name in names)
 
 
-def bundled_soffice() -> tuple[str, ...]:
-    if os.name == "nt":
-        names = ("libreoffice/program/soffice.com", "libreoffice/program/soffice.exe",
-                 "LibreOfficePortable/App/libreoffice/program/soffice.com",
-                 "LibreOfficePortable/App/libreoffice/program/soffice.exe")
-    else:
-        names = ("libreoffice/program/soffice", "libreoffice/bin/soffice")
-    return tuple(str(VENDOR_ROOT / name) for name in names)
-
-
 def tessdata_path(settings) -> Path:
     local = vendor_path(settings.tessdata or str(VENDOR_ROOT / "tesseract" / "tessdata"))
     if not local.is_dir():

@@ -12,7 +12,7 @@ from imss.recognition.extract import image_pages, tesseract_path, IMAGE_EXTENSIO
 from imss.recognition.layout import visual_lines, evidence, contains_amount
 from imss.recognition.fields import PAID, extract_order_amount
 from imss.recognition.rules import clean_text
-from imss.runtime.office import run_process
+from imss.runtime.process import run_process
 from imss.runtime.paths import tessdata_path
 
 

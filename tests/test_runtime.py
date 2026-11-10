@@ -8,8 +8,7 @@ from unittest.mock import patch
 from PIL import Image
 from imss.recognition.extract import ocr_image, tesseract_path
 from imss.core.models import Settings
-from imss.runtime.office import convert_office, soffice_path
-from imss.runtime.paths import bundled_soffice, bundled_tesseract, tessdata_path
+from imss.runtime.paths import bundled_tesseract, tessdata_path
 
 
 class PortableRuntimeTests(unittest.TestCase):
@@ -24,15 +23,13 @@ class PortableRuntimeTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_only_project_bundle_is_used_even_when_path_has_programs(self):
-        for candidate, resolve in ((bundled_tesseract()[0], tesseract_path), (bundled_soffice()[0], soffice_path)):
-            path = Path(candidate)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b'fixture')
-            with patch('imss.runtime.office.shutil.which', return_value='system-program') as search:
-                self.assertEqual(resolve(Settings()), str(path.resolve()))
-                settings = Settings(tesseract=str(path), soffice=str(path))
-                self.assertEqual(resolve(settings), str(path.resolve()))
-                search.assert_not_called()
+        path = Path(bundled_tesseract()[0])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'fixture')
+        with patch('shutil.which', return_value='system-program') as search:
+            self.assertEqual(tesseract_path(Settings()), str(path.resolve()))
+            self.assertEqual(tesseract_path(Settings(tesseract=str(path))), str(path.resolve()))
+            search.assert_not_called()
 
     def test_project_models_are_used_by_ocr_without_configuration(self):
         models = self.root / 'vendor/tesseract/tessdata'
@@ -53,17 +50,16 @@ class PortableRuntimeTests(unittest.TestCase):
     def test_missing_bundle_never_falls_back_to_installed_programs(self):
         with self.assertRaisesRegex(RuntimeError, '模型目录缺失'):
             tessdata_path(Settings())
-        with patch('imss.runtime.office.shutil.which', return_value='installed-program') as search:
-            for resolve in (tesseract_path, soffice_path):
-                with self.assertRaisesRegex(RuntimeError, 'vendor'):
-                    resolve(Settings())
+        with patch('shutil.which', return_value='installed-program') as search:
+            with self.assertRaisesRegex(RuntimeError, 'vendor'):
+                tesseract_path(Settings())
             search.assert_not_called()
 
     def test_external_configured_paths_are_rejected(self):
         external = self.root / 'external-program'
         external.write_bytes(b'fixture')
-        settings = Settings(tesseract=str(external), soffice=str(external), tessdata=str(self.root))
-        for resolve in (tesseract_path, soffice_path, tessdata_path):
+        settings = Settings(tesseract=str(external), tessdata=str(self.root))
+        for resolve in (tesseract_path, tessdata_path):
             with self.assertRaisesRegex(RuntimeError, 'vendor'):
                 resolve(settings)
 
@@ -75,8 +71,7 @@ class PortableRuntimeTests(unittest.TestCase):
             relative = executable.relative_to(self.root)
             self.assertEqual(tesseract_path(Settings(tesseract=str(relative))), str(executable.resolve()))
 
-    def test_word_backend_is_rejected_including_legacy_settings(self):
-        with self.assertRaises(ValueError):
-            Settings.from_dict({'office_backend': 'word'})
-        with self.assertRaisesRegex(RuntimeError, '项目内 LibreOffice'):
-            convert_office(Path('input.docx'), Path('output.pdf'), Settings(office_backend='word'))
+    def test_legacy_office_settings_do_not_prevent_rebuild(self):
+        settings = Settings.from_dict({'office_backend': 'libreoffice', 'soffice': '', 'office_timeout': 180,
+                                      'dpi': 120})
+        self.assertEqual(settings, Settings(dpi=120))

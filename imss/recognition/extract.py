@@ -1,9 +1,9 @@
 """文件内容识别与本地文字提取；扩展名不可靠时按文件头判断格式。
 
-PDF 优先读取带坐标的文字层，缺少文字时逐页 OCR；Word 图片需经
-LibreOffice 渲染。PDFium 原生对象共用锁，避免并发访问导致崩溃。
+PDF 优先读取带坐标的文字层，缺少文字时逐页 OCR；DOCX 直接读取文字和内嵌图片。
+PDFium 原生对象共用锁，避免并发访问导致崩溃。
 """
-from contextlib import closing, contextmanager
+from contextlib import closing
 import csv
 import io
 from pathlib import Path
@@ -17,7 +17,7 @@ from PIL import Image, ImageOps, ImageSequence
 import pypdfium2 as pdfium
 
 from imss.core.models import Settings
-from imss.runtime.office import convert_office, find_executable, run_process
+from imss.runtime.process import find_executable, run_process
 from imss.runtime.paths import bundled_tesseract, tessdata_path
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp"}
@@ -169,21 +169,13 @@ def pdf_pages(path: Path, settings: Settings):
                 yield render_page(page, settings)
 
 
-@contextmanager
-def as_pdf(path: Path, extension: str, settings: Settings):
-    if extension == ".pdf":
-        yield path
-    else:
-        with tempfile.TemporaryDirectory(prefix="models-pages-") as directory:
-            yield convert_office(path, Path(directory) / "document.pdf", settings)
-
-
 def material_pages(path: Path, extension: str, settings: Settings):
     if extension in IMAGE_EXTENSIONS:
         yield from image_pages(path, settings)
+    elif extension == ".pdf":
+        yield from pdf_pages(path, settings)
     else:
-        with as_pdf(path, extension, settings) as pdf:
-            yield from pdf_pages(pdf, settings)
+        raise ValueError("请将 Word 附件另存为 PDF 或图片后重新扫描")
 
 
 def extract_pdf(path: Path, settings: Settings) -> tuple[str, list[str]]:
@@ -312,8 +304,7 @@ def extract(path: Path, extension: str, settings: Settings) -> tuple[str, list[s
     if extension == ".docx":
         return extract_docx(path, settings)
     if extension == ".doc":
-        with as_pdf(path, extension, settings) as pdf:
-            return extract_pdf(pdf, settings)
+        raise ValueError("请将旧版 DOC 原件另存为 PDF 后重新扫描")
     texts, issues, layout = [], [], []
     for index, image in enumerate(image_pages(path, settings)):
         try:

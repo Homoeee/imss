@@ -1,20 +1,25 @@
 {
   "物品": {
+    "is_prize": 0,
     "signature_image": "",
     "student_id": "",
     "phone": ""
   },
   "奖品": {
+    "is_prize": 0,
     "signature_image": "",
     "student_id": "",
     "phone": ""
   },
   "工作餐": {
+    "is_prize": 0,
+    "meal_sheet": "",
     "signature_image": "",
     "student_id": "",
     "phone": ""
   },
   "行程": {
+    "is_prize": 0,
     "signature_image": "",
     "student_id": "",
     "phone": "",
@@ -28,6 +33,7 @@
     "purpose": ""
   },
   "快递": {
+    "is_prize": 0,
     "signature_image": "",
     "student_id": "",
     "phone": ""

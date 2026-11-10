@@ -1,4 +1,5 @@
 import csv
+from contextlib import closing
 import json
 from pathlib import Path
 import tempfile
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 from PIL import Image
 from docx import Document
+import pypdfium2 as pdfium
 from imss.core.models import Material, Settings
 
 from imss.output.review import write_review
@@ -50,32 +52,81 @@ class OutputLayoutTests(unittest.TestCase):
             self.assertFalse(any(records_output.iterdir()))
             self.assertFalse(any(p.is_dir() for p in (output / '原始材料').iterdir()))
 
-    def test_export_pdf_updates_the_separate_processing_report(self):
-        from main import main
+    def test_build_creates_pdf_from_verified_materials_and_updates_report(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source, output = root / 'input', root / '报销材料'
-            source.mkdir()
-            for index in range(2):
-                Image.new('RGB', (120 + index, 100), 'white').save(source / f'{index}.png')
-            texts = ['电子发票\n物品名称：打印纸\n（小写）￥35.80', '交易成功\n物品名称：打印纸\n实付款：35.80']
-            with patch('imss.workflow.extract', side_effect=lambda path, ext, settings: (texts[int(path.stem)], [])):
-                manifest = scan(source, output, Settings(workers=1))
+            manifest = self.scan_pair(Path(directory))
             report = build(manifest, skip_pdf=True)
             self.assertIsNone(report['generated'][0]['pdf'])
-            def convert(source, destination, settings):
-                Image.new('RGB', (120, 100), 'white').save(destination, 'PDF')
-                return destination
-            with patch('imss.runtime.office.convert_office', side_effect=convert):
-                self.assertEqual(main(['export-pdf', str(output)]), 0)
-            report = json.loads((default_records(output) / '核对清单.json').read_text(encoding='utf-8'))['report']
-            self.assertTrue(report['generated'][0]['pdf'])
+            output = Path(report['output'])
+            report = build(manifest)
+            self.assertFalse(report['pending'])
+            name = report['generated'][0]['pdf']
+            self.assertEqual(name, '01.打印纸_35.80元.pdf')
+            word = Document(output / report['generated'][0]['word'])
+            for table in word.tables[1:-1]:
+                self.assertEqual(table._tbl.xpath('./w:tblPr/w:tblBorders/*/@w:val'), ['dashed'] * 6)
+                self.assertEqual(table._tbl.xpath('./w:tblPr/w:tblBorders/*/@w:color'), ['000000'] * 6)
+            with pdfium.PdfDocument(output / name) as pdf:
+                self.assertEqual(len(pdf), 1)
+                with closing(pdf[0]) as page, closing(page.get_textpage()) as text:
+                    self.assertIn('打印纸', text.get_text_range())
+                    self.assertEqual(len(list(page.get_objects(filter=[3]))), 3)
+                    self.assertEqual(sum(pdfium.raw.FPDFPageObj_GetDashCount(obj.raw) > 0
+                                         for obj in page.get_objects(filter=[2])), 2)
+            self.assertEqual(json.loads(manifest.read_text(encoding='utf-8'))['report']['generated'], report['generated'])
             self.assertFalse(any('--skip-pdf' in issue for entry in report['warnings'] for issue in entry['issues']))
             self.assertFalse((output / '处理报告.json').exists())
             self.assertEqual(len([name for name in report['files'] if name.startswith('原始材料/')]), 2)
             self.assertTrue(all((output / name).is_file() for name in report['files']))
-            # 补导 PDF 后，嵌套附件的摘要仍可用于重复 build。
+            # 重新生成 PDF 后，嵌套附件的摘要仍可用于重复 build。
             self.assertFalse(build(manifest, skip_pdf=True)['pending'])
+
+    def test_meal_form_has_dedicated_receipt_column_and_only_uses_linked_sheet(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'input'
+            source.mkdir()
+            states = {}
+            for index, (name, kind, item, amount) in enumerate((
+                    ('invoice.png', '电子发票', '彩排午餐', '88.00'),
+                    ('menu.png', '购买清单', '彩排午餐', '88.00'),
+                    ('sheet.png', '签领表', '人员签领表', ''),
+            )):
+                Image.new('RGB', (220, 300), (230 + index, 100, 100)).save(source / name)
+                states[name] = dict(kind=kind, item=item, amount=amount, confirmed='已校验')
+            with patch('imss.workflow.extract', return_value=('待核对', [])):
+                manifest = scan(source, None, Settings(workers=1))
+            records = [Material(**entry) for entry in json.loads(manifest.read_text(encoding='utf-8'))['materials']]
+            review = manifest.with_suffix('.xlsx')
+            details = manifest.parent / 'detail.json'
+            for mode in ('missing', 'explicit', 'same_title'):
+                with self.subTest(mode=mode):
+                    states['sheet.png']['item'] = '彩排午餐签领表' if mode == 'same_title' else '人员签领表'
+                    write_review(review, records, source, states=states)
+                    config = {'invoice.png': {'meal_sheet': 'sheet.png'}} if mode == 'explicit' else {}
+                    details.write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
+                    report = build(review)
+                    self.assertFalse(report['pending'])
+                    entry, standalone = report['generated']
+                    self.assertEqual(standalone['kind'], '签领表')
+                    linked = mode != 'missing'
+                    self.assertEqual('sheet.png' in entry['sources'], linked)
+                    output = Path(report['output'])
+                    document = Document(output / entry['word'])
+                    table = document.tables[-2]
+                    self.assertEqual(len(table.rows), 1)
+                    self.assertEqual([cell.text for cell in table.rows[0].cells], ['', ''])
+                    self.assertEqual(table._tbl.xpath('./w:tblPr/w:tblBorders/w:insideV/@w:val'), ['dashed'])
+                    self.assertTrue(table.cell(0, 0)._tc.xpath('.//a:blip'))
+                    self.assertEqual(bool(table.cell(0, 1)._tc.xpath('.//a:blip')), linked)
+                    with pdfium.PdfDocument(output / entry['pdf']) as pdf:
+                        self.assertEqual(len(pdf), 1)
+                        with closing(pdf[0]) as page, closing(page.get_textpage()) as text:
+                            self.assertNotIn('用餐清单', text.get_text_range())
+                            self.assertNotIn('用餐签领表', text.get_text_range())
+                            self.assertEqual(len(list(page.get_objects(filter=[3]))), 3 + linked)
+                            self.assertEqual(sum(pdfium.raw.FPDFPageObj_GetDashCount(obj.raw) > 0
+                                                 for obj in page.get_objects(filter=[2])), 3)
 
     def test_shared_receipt_is_one_trailing_pdf_and_never_inside_words(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -138,11 +189,13 @@ class OutputLayoutTests(unittest.TestCase):
             report = build(manifest, skip_pdf=True)
             output = Path(report['output'])
             state = json.loads(manifest.read_text(encoding='utf-8'))
-            # 模拟此前平铺版本的输出与摘要，用户无需重新扫描或修改核对表。
+            # 模拟旧附件目录和未带单位的报销单文件名。
             old_files = {}
             for name, digest in report['files'].items():
                 previous_name = Path(name).name
-                if name.startswith('原始材料/'):
+                if previous_name.endswith('元.docx'):
+                    previous_name = previous_name.removesuffix('元.docx') + '.docx'
+                if name != previous_name:
                     (output / name).replace(output / previous_name)
                 old_files[previous_name] = digest
             (output / '原始材料').rmdir()
@@ -153,6 +206,7 @@ class OutputLayoutTests(unittest.TestCase):
             rebuilt = build(manifest, skip_pdf=True)
             self.assertFalse(rebuilt['pending'])
             self.assertFalse(list(output.glob('*元-*')))
+            self.assertEqual({p.name for p in output.glob('*.docx')}, {'01.打印纸_35.80元.docx'})
             evidence = list((output / '原始材料').iterdir())
             self.assertEqual(len(evidence), 2)
             self.assertEqual(note.read_text(encoding='utf-8'), '保留用户内容')

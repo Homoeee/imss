@@ -21,14 +21,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: sudo apt-get update && sudo apt-get install -y libreoffice-writer tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng fonts-noto-cjk
+      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
       - name: Stage project-local integration components
         run: |
-          mkdir -p vendor/tesseract/tessdata vendor/libreoffice
+          mkdir -p vendor/tesseract/tessdata
           cp /usr/bin/tesseract vendor/tesseract/tesseract
           cp /usr/share/tesseract-ocr/5/tessdata/eng.traineddata vendor/tesseract/tessdata/
           cp /usr/share/tesseract-ocr/5/tessdata/chi_sim.traineddata vendor/tesseract/tessdata/
-          cp -aL /usr/lib/libreoffice/. vendor/libreoffice/
       - run: python -m pip install -e .
       - run: python main.py doctor
       - run: python -m unittest discover -s tests -v

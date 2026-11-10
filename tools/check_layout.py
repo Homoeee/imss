@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from imss.output.documents import build_document
+from imss.output.pdf import build_pdf
 from imss.recognition.extract import detect_extension
 from imss.core.models import Bundle, Material, Settings, safe_name
 
@@ -27,12 +28,15 @@ if __name__ == '__main__':
                                       kind=label['kind'], item=group['item'], amount=group['amount'],
                                       category=group['category'], archived=str(path)))
         bundle = Bundle(group['id'], group['item'], group['amount'], materials)
-        destination = args.destination / (group['id'] + '.' + safe_name(group['item']) + '_' + group['amount'] + '.docx')
-        if destination.exists():
-            continue
-        build_document(bundle, group['id'], None, destination, Settings(),
-                       details={'category': group['category'], 'is_prize': group['is_prize'], 'amount_equal': True})
-        print(destination.name)
+        stem = group['id'] + '.' + safe_name(group['item']) + '_' + group['amount'] + '元'
+        word, pdf = (args.destination / (stem + extension) for extension in ('.docx', '.pdf'))
+        settings = Settings()
+        details = {'category': group['category'], 'is_prize': group['is_prize']}
+        if not word.exists():
+            build_document(bundle, group['id'], None, word, settings, details=details)
+        if not pdf.exists():
+            build_pdf(bundle, group['id'], pdf, settings, details=details)
+        print(stem)
     (args.destination / 'TEST_SCOPE.txt').write_text(
         'Controlled layout test ONLY. Grouping, item names, amounts and prize flags were supplied by the reference oracle. '
         'This is NOT an automatic recognition result. Purposes, IDs, contact details and signatures are left blank. '

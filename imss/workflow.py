@@ -1,6 +1,8 @@
 """应用流程：扫描→核对→重新校验→生成；原件全程只读。"""
 from datetime import datetime
+from collections import Counter
 from copy import deepcopy
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
@@ -9,6 +11,7 @@ import shutil
 import tempfile
 
 from imss.output.documents import build_document
+from imss.output.pdf import build_pdf
 from imss.details import DETAIL_NAME, ensure_details, load_details, expand_passengers
 from imss.recognition.extract import IMAGE_EXTENSIONS, detect_extension, extract, image_pages
 from imss.core.matching import group_materials
@@ -17,49 +20,15 @@ from imss.output.review import (apply_review, write_review, refresh_review, read
                                 migrated_states)
 from imss.core.rematching import group_verified_materials
 from imss.core.candidates import pairing_candidates
-from imss.core.models import KINDS, SPECIALS, STANDALONE_SHEETS, Bundle, Material, Settings, inside, safe_name
-from imss.runtime.office import convert_office
+from imss.core.models import KINDS, MEAL_NAMES, SPECIALS, STANDALONE_SHEETS, Bundle, Material, Settings, inside, normalized, safe_name
 from imss.recognition.rules import recognize
+from imss.recognition.tables import SHEET_WORDS, sheet_heading
 from imss.recognition.refine import refine_missing_amount
 from imss.output.workspace import EVIDENCE_DIR, default_output, default_records, managed_path, validate_layout, reset_scan_directories
 from imss.core.numbering import bundle_numbers
 
 LOGGER = logging.getLogger(__name__)
 STATE_NAME = '核对清单.json'
-
-
-def sync_pdf_report(output: Path):
-    """补导 PDF 后同步同一个状态文件，不另建报告文件。"""
-    output = output.resolve()
-    path = default_records(output) / STATE_NAME
-    if not path.is_file():
-        return
-    data = json.loads(path.read_text(encoding='utf-8'))
-    if Path(data['output']).resolve() != output:
-        raise ValueError('核对清单不属于本次输出目录')
-    report = data.get('report')
-    if not report:
-        return
-    resolved = set()
-    for entry in report['generated']:
-        if entry.get('word'):
-            pdf = output / Path(entry['word']).with_suffix('.pdf')
-            if pdf.is_file() and pdf.read_bytes()[:5] == b'%PDF-':
-                entry['pdf'] = pdf.name
-                resolved.add(entry['group'])
-    for entry in report['warnings']:
-        if entry.get('group') in resolved:
-            entry['issues'] = [issue for issue in entry['issues'] if '--skip-pdf' not in issue]
-    report['warnings'] = [entry for entry in report['warnings'] if entry['issues']]
-    report['pending'] = [entry for entry in report['pending'] if not (
-        entry.get('group') in resolved and all('PDF 导出失败' in issue for issue in entry['issues']))]
-    # 仅登记程序生成的文件，不能把用户另放的文件收编为下次可覆盖成果。
-    managed = set(report.get('files', {}))
-    managed.update(entry['pdf'] for entry in report['generated'] if entry.get('pdf'))
-    managed_files = {name: managed_path(output, name) for name in managed}
-    report['files'] = {name: digest_file(file_path) for name, file_path in managed_files.items()
-                       if file_path.is_file()}
-    write_json(path, data)
 
 
 def scan(root: Path, output: Path | None, settings: Settings, template: Path | None = None,
@@ -276,14 +245,28 @@ def export_special(material: Material, destination: Path, settings: Settings, so
             for image in images:
                 image.close()
     elif material.extension in (".doc", ".docx"):
-        convert_office(source, destination, settings)
+        raise ValueError("请将独立 Word 材料另存为 PDF 后重新扫描")
     else:
         raise ValueError("特殊材料格式不支持 PDF 转换")
 
 
+def find_meal_sheet(sheets, source, item, unique_item):
+    if source:
+        return next((sheet for sheet in sheets if sheet.source == source.replace('\\', '/')), None)
+    if not unique_item or not item:
+        return None
+    matches = []
+    for sheet in sheets:
+        names = {normalized(sheet.item), normalized(sheet.title)}
+        if any(name == item or any(name.removesuffix(suffix) == item for suffix in SHEET_WORDS['签领表'])
+               for name in names):
+            matches.append(sheet)
+    return matches[0] if len(matches) == 1 else None
+
+
 def build(manifest_path: Path, review: Path | None = None, template: Path | None = None,
           skip_pdf: bool = False, start: int = 1, settings_override: Settings | None = None,
-          details_path: Path | None = None, person_defaults: dict | None = None) -> dict:
+          details_path: Path | None = None, person_defaults: dict | None = None, is_prize: int | None = None) -> dict:
     """以用户保存的 Excel 为核对输入，兼容旧 JSON 入口，在暂存目录生成后发布。
 
     可重复运行：只替换上次生成且摘要未变的文件，保留人工新增文件，
@@ -333,7 +316,7 @@ def build(manifest_path: Path, review: Path | None = None, template: Path | None
         staging = Path(directory)
         report = _build_into(data, records, root, staging, processing, review, template,
                              skip_pdf, start, settings_override, details_path, person_defaults,
-                             verified_only=review_mode == 'simple')
+                             verified_only=review_mode == 'simple', is_prize=is_prize)
         staged_files = {p.relative_to(staging).as_posix(): p for p in staging.rglob('*') if p.is_file()}
         names = set(staged_files)
         destinations = {name: managed_path(output, name) for name in names}
@@ -364,7 +347,7 @@ def build(manifest_path: Path, review: Path | None = None, template: Path | None
 
 
 def _build_into(data, records, root, output, records_output, review, template,
-                skip_pdf, start, settings_override, details_path, person_defaults, verified_only=False):
+                skip_pdf, start, settings_override, details_path, person_defaults, verified_only=False, is_prize=None):
     """在独立暂存目录组装附件及文档；输出路径由上层统一发布。"""
     all_records = records
     waiting = [m for m in records if not m.confirmed] if verified_only else []
@@ -404,13 +387,14 @@ def _build_into(data, records, root, output, records_output, review, template,
     back = sorted((m for m in specials if m.kind == "情况说明"), key=lambda m: m.source)
     receipt_sheets = sorted((m for m in records if m.kind in STANDALONE_SHEETS and not m.duplicate_of),
                             key=lambda m: (m.group, m.source))
+    meal_sheets = [m for m in receipt_sheets if m.kind == '签领表' and m.extension in (*IMAGE_EXTENSIONS, '.pdf')]
+    item_counts = Counter(normalized(b.item) for b in bundles if not b.issues)
 
     def add_special(material, fixed_number=None):
         nonlocal sequence
         title = material.title or material.item or Path(material.source).stem
         suffix = material.kind
         if material.kind in STANDALONE_SHEETS:
-            from imss.recognition.tables import sheet_heading
             if sheet_heading(title)[0]:
                 suffix = ''  # “某活动签收表”保留原表名，不再拼成“签收表签领表”。
         elif title.endswith(material.kind):
@@ -446,7 +430,7 @@ def _build_into(data, records, root, output, records_output, review, template,
             report["pending"].append({"group": bundle.key, "sources": [m.source for m in bundle.materials], "issues": bundle.issues})
             continue
         number = numbering[bundle.key]
-        stem = number + "." + safe_name(bundle.item) + "_" + bundle.amount
+        stem = number + "." + safe_name(bundle.item) + "_" + bundle.amount + "元"
         destination = output / (stem + ".docx")
         LOGGER.info("生成 %s", destination.name)
         try:
@@ -461,8 +445,14 @@ def _build_into(data, records, root, output, records_output, review, template,
                 if invoice_id in details:
                     overrides.update(details[invoice_id])
                     break
-            category = overrides.get('category') or invoice.category or '物品'
+            recognized_category = invoice.category or '物品'
+            if recognized_category == '物品' and any(name in bundle.item for name in MEAL_NAMES):
+                recognized_category = '工作餐'
+            category = overrides.get('category') or recognized_category
             fields = {**person_defaults, **expand_passengers(details.get(category, {})), **expand_passengers(overrides)}
+            fields['category'] = category
+            if is_prize is not None:
+                fields['is_prize'] = is_prize
             item_template = template
             if fields.get('template'):
                 item_template = Path(fields['template'])
@@ -470,6 +460,16 @@ def _build_into(data, records, root, output, records_output, review, template,
                     item_template = details_path.parent / item_template
                 if not item_template.is_file() or detect_extension(item_template) != '.docx':
                     raise ValueError("该分组的 template 不是有效 DOCX")
+            if category == '工作餐' and item_template is None:
+                source = fields.get('meal_sheet', '')
+                item = normalized(bundle.item)
+                sheet = find_meal_sheet(meal_sheets, source, item, item_counts[item] == 1)
+                if sheet:
+                    bundle = replace(bundle, materials=[*bundle.materials, replace(sheet, archived=str(root / sheet.source))])
+                else:
+                    message = (f'找不到已校验的签领表 PDF 或图片: {source}' if source else
+                               '未匹配到唯一的用餐签领表，可在 detail.json 用 meal_sheet 指定原文件名称')
+                    report['warnings'].append({'group': bundle.key, 'issues': [message]})
             build_document(bundle, number, item_template, destination, settings, details=fields)
             generated = {"sequence": number, "kind": "报销材料", "item": bundle.item,
                          "group": bundle.key, "sources": [m.source for m in bundle.materials],
@@ -478,13 +478,15 @@ def _build_into(data, records, root, output, records_output, review, template,
             report["generated"].append(generated)
             report["warnings"].append({"group": bundle.key, "issues": ["请核对用途、奖品状态、报销金额及人员信息；承诺栏采用模板原图，开票人签字按用户配置填入，未提供时留空"]})
             if skip_pdf:
-                report["warnings"].append({"group": bundle.key, "issues": ["根据 --skip-pdf 跳过 Word 的 PDF 导出"]})
+                report["warnings"].append({"group": bundle.key, "issues": ["根据 --skip-pdf 跳过报销单 PDF 生成"]})
             else:
                 try:
-                    pdf = convert_office(destination, output / (stem + ".pdf"), settings)
+                    if item_template:
+                        raise ValueError("自定义 Word 模板仅生成 DOCX；使用 --skip-pdf 可仅生成 Word")
+                    pdf = build_pdf(bundle, number, output / (stem + ".pdf"), settings, details=fields)
                     generated["pdf"] = pdf.name
                 except Exception as exc:
-                    report["pending"].append({"group": bundle.key, "issues": [f"Word 已保存，PDF 导出失败: {exc}"]})
+                    report["pending"].append({"group": bundle.key, "issues": [f"Word 已保存，PDF 生成失败: {exc}"]})
         except Exception as exc:
             report["pending"].append({"group": bundle.key, "issues": [f"Word 生成失败: {exc}"]})
     for material in receipt_sheets:

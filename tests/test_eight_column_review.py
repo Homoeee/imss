@@ -85,7 +85,7 @@ class EightColumnReviewTests(unittest.TestCase):
         report = build(manifest, skip_pdf=True)
         self.assertEqual(report['generated'][0]['item'], '打印纸')
         self.assertEqual(report['generated'][0]['amount'], '35.80')
-        self.assertFalse((Path(report['output']) / '01.活动用纸_36.00.docx').exists())
+        self.assertFalse((Path(report['output']) / '01.活动用纸_36.00元.docx').exists())
         data = json.loads(manifest.read_text(encoding='utf-8'))
         self.assertTrue(all(m['item'] == '打印纸' and m['amount'] == '35.80' for m in data['materials']))
 
@@ -106,13 +106,13 @@ class EightColumnReviewTests(unittest.TestCase):
         self.assertEqual((report['generated'][0]['item'], report['generated'][0]['amount']),
                          ('活动用纸', '36.00'))
         self.assertEqual(Path(report['review_file']), path.resolve())
-        self.assertTrue((Path(report['output']) / '01.活动用纸_36.00.docx').is_file())
+        self.assertTrue((Path(report['output']) / '01.活动用纸_36.00元.docx').is_file())
         self.edit(path, {name: {6: '办公用纸', 7: '37'} for name in ('i.png', 'p.png')})
         with redirect_stdout(io.StringIO()):
             self.assertEqual(main(['build', str(path), '--skip-pdf']), 0)
         output = Path(report['output'])
-        self.assertTrue((output / '01.办公用纸_37.00.docx').is_file())
-        self.assertFalse((output / '01.活动用纸_36.00.docx').exists())
+        self.assertTrue((output / '01.办公用纸_37.00元.docx').is_file())
+        self.assertFalse((output / '01.活动用纸_36.00元.docx').exists())
 
     def test_excel_entry_reads_the_selected_workbook_instead_of_default_workbook(self):
         manifest, path = self.scanned()

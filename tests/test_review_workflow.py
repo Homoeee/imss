@@ -120,12 +120,12 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertFalse(confirmed['pending'])
         self.assertTrue(all(row['severity'] == '正常' for row in read_review(review)))
         output = default_output(self.source)
-        self.assertTrue((output / '01.打印纸_35.80.docx').is_file())
+        self.assertTrue((output / '01.打印纸_35.80元.docx').is_file())
         self.edit_rows(review, lambda row: setattr(row[5], 'value', '活动用纸'))
         renamed = build(manifest, skip_pdf=True)
         self.assertFalse(renamed['pending'])
-        self.assertFalse((output / '01.打印纸_35.80.docx').exists())
-        doc = Document(output / '01.活动用纸_35.80.docx')
+        self.assertFalse((output / '01.打印纸_35.80元.docx').exists())
+        doc = Document(output / '01.活动用纸_35.80元.docx')
         self.assertIn('活动用纸', '\n'.join(c.text for t in doc.tables for r in t.rows for c in r.cells))
         self.assertEqual(original, {p.name: digest_file(p) for p in self.source.iterdir()})
         self.assertEqual({p.name for p in self.root.iterdir()}, {'input', '报销材料', '核对清单'})
@@ -198,7 +198,7 @@ class ReviewWorkflowTests(unittest.TestCase):
     def test_user_files_are_not_overwritten(self):
         manifest, _ = self.make_scan(amount_only=False)
         output = default_output(self.source)
-        existing = output / '01.打印纸_35.80.docx'
+        existing = output / '01.打印纸_35.80元.docx'
         existing.write_bytes(b'user file')
         with self.assertRaisesRegex(ValueError, '拒绝覆盖'):
             build(manifest, skip_pdf=True)

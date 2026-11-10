@@ -1,16 +1,13 @@
 from pathlib import Path
 import os
-import tempfile
 import unittest
 from unittest.mock import patch
 
 from PIL import Image, ImageDraw, ImageFont
-from docx import Document
-import pypdfium2 as pdfium
 
 from imss.recognition.extract import ocr_image, tesseract_path
 from imss.core.models import Settings
-from imss.runtime.office import convert_office, run_process, soffice_path
+from imss.runtime.process import run_process
 from imss.runtime.paths import tessdata_path
 
 
@@ -42,24 +39,6 @@ class LocalIntegrationTests(unittest.TestCase):
         text, issues = ocr_image(image, settings)
         self.assertIn('35.80', text)
         self.assertFalse(issues)
-
-    @patch.dict(os.environ, {'PATH': '', 'TESSDATA_PREFIX': 'nonexistent-system-models'})
-    def test_real_libreoffice_export(self):
-        settings = Settings(office_backend='libreoffice')
-        try:
-            soffice_path(settings)
-        except RuntimeError as exc:
-            self.skipTest(str(exc))
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            document = Document()
-            document.add_paragraph('Offline export verification 35.80')
-            source = root / 'check.docx'
-            document.save(source)
-            target = convert_office(source, root / 'check.pdf', settings)
-            with pdfium.PdfDocument(target) as pdf:
-                self.assertEqual(len(pdf), 1)
-
 
 if __name__ == '__main__':
     unittest.main()

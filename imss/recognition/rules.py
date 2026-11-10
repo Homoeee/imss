@@ -6,7 +6,7 @@
 import re
 import unicodedata
 
-from imss.core.models import Material, money, normalized, STANDALONE_SHEETS
+from imss.core.models import MEAL_NAMES, Material, money, normalized, STANDALONE_SHEETS
 from imss.recognition.tables import sheet_heading, list_heading, looks_like_list
 
 from imss.recognition.fields import MONEY_PATTERN, extract_amount, extract_item, extract_order_ids
@@ -80,7 +80,7 @@ def recognize(material: Material) -> Material:
     material.invoice_ids = sorted(set(re.findall(r"(?<!\d)\d{20}(?!\d)", invoice_text)))
     compact = normalized(fields_text)
     material.category = ("行程" if any(word in compact for word in ("交通运输", "打车", "客运服务", "旅客运输", "滴滴出行", "高德打车", "行程已结束", "呼叫返程", "行程详情"))
-                         else "工作餐" if any(word in compact for word in ("餐饮服务", "工作餐", "快餐"))
+                         else "工作餐" if any(word in compact for word in (*MEAL_NAMES, "餐饮服务", "快餐"))
                          else "快递" if any(word in compact for word in ("收派服务", "运单", "顺丰速运")) else "物品")
     material.related_amounts = []
     for amount in re.findall(r"(?:[¥￥]\s*" + MONEY_PATTERN + r"|" + MONEY_PATTERN + r"\s*元)", fields_text):

@@ -1,6 +1,6 @@
 """Configured person fields must not overwrite the template's promise image."""
 import csv
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 import io
 import json
 from pathlib import Path
@@ -10,7 +10,10 @@ from unittest.mock import patch
 
 from PIL import Image
 from docx import Document
+import pypdfium2 as pdfium
+from imss.details import load_details
 from imss.output.documents import build_document
+from imss.output.pdf import build_pdf
 from imss.core.models import Bundle, Material, Settings
 from imss.workflow import build, scan
 
@@ -37,6 +40,7 @@ class FormFieldsTests(unittest.TestCase):
                        destination, Settings(), details={'signature_image': str(self.signature),
                                                         'student_id': 'TEST-ID', 'phone': 'TEST-PHONE'})
         document = Document(destination)
+        self.assertFalse(document.sections[0]._sectPr.xpath('w:headerReference | w:footerReference'))
         declaration = document.tables[-1]
         buyer = declaration.cell(0, 0)
         buyer_ids = buyer._tc.xpath('.//a:blip/@r:embed')
@@ -49,7 +53,67 @@ class FormFieldsTests(unittest.TestCase):
         text = '\n'.join(c.text for r in declaration.rows for c in r.cells)
         self.assertIn('TEST-ID', text)
         self.assertIn('TEST-PHONE', text)
+        self.assertIn('☑否', text)
+        self.assertIn('☑是', text)
+        self.assertIn('□是，签领单附后', text)
         self.assertNotIn('{{', text)
+
+    def test_prize_flag_from_details_and_cli_and_amount_agreement(self):
+        from main import main
+
+        manifest = self.make_scan()
+        details = manifest.parent / 'detail.json'
+        values = json.loads(details.read_text(encoding='utf-8'))
+        self.assertEqual(values['物品']['is_prize'], 0)
+        values['物品'].update(is_prize=1, amount_equal=False)
+        details.write_text(json.dumps(values, ensure_ascii=False), encoding='utf-8')
+
+        for arguments, prize in (([], '☑是，签领单附后'), (['--is-prize', '0'], '☑否')):
+            with self.subTest(arguments=arguments), redirect_stdout(io.StringIO()):
+                self.assertEqual(main(['build', str(manifest), '--skip-pdf', *arguments]), 0)
+                report = json.loads(manifest.read_text(encoding='utf-8'))['report']
+                document = Document(Path(report['output']) / report['generated'][0]['word'])
+                declaration = document.tables[-1]
+                self.assertIn(prize, [cell.text for cell in declaration.rows[2].cells])
+                self.assertIn('☑是', [cell.text for cell in declaration.rows[3].cells])
+
+        for invalid in (2, '1', 1.0):
+            with self.subTest(invalid=invalid):
+                values['物品']['is_prize'] = invalid
+                details.write_text(json.dumps(values, ensure_ascii=False), encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'is_prize 必须是 0 或 1'):
+                    load_details(details, {})
+
+    def test_pdf_checkbox_marks_and_signature_to_right_of_label(self):
+        pdf_path = build_pdf(Bundle('test', '打印纸', '35.80', self.materials), '01',
+                             self.root / 'signed.pdf', Settings(), details={'signature_image': str(self.signature)})
+        with pdfium.PdfDocument(pdf_path) as pdf, closing(pdf[0]) as page, closing(page.get_textpage()) as text:
+            self.assertEqual(len(pdf), 1)
+            self.assertIn('☑否', text.get_text_range())
+            self.assertIn('☑是', text.get_text_range())
+            with closing(text.search('签名：')) as search:
+                start, length = search.get_next()
+            _, label_bottom, label_right, label_top = text.get_charbox(start + length - 1)
+            signatures = [image.get_bounds() for image in page.get_objects(filter=[3])]
+            self.assertTrue(any(left >= label_right and bottom < label_top and top > label_bottom
+                                and 10 < right - left < 70 for left, bottom, right, top in signatures))
+
+    def test_custom_header_and_footer_fields_are_filled_without_adding_empty_parts(self):
+        template = self.root / 'custom.docx'
+        document = Document()
+        section = document.sections[0]
+        section.header.paragraphs[0].text = '{{item_name}}'
+        section.first_page_footer.paragraphs[0].text = '{{amount}}'
+        document.add_section()
+        document.save(template)
+
+        destination = self.root / 'form.docx'
+        build_document(Bundle('test', '打印纸', '35.80', self.materials), '01', template, destination, Settings())
+        first, second = Document(destination).sections
+        self.assertEqual(first.header.paragraphs[0].text, '打印纸')
+        self.assertEqual(first.first_page_footer.paragraphs[0].text, '35.80')
+        self.assertEqual(len(first._sectPr.xpath('w:headerReference | w:footerReference')), 2)
+        self.assertFalse(second._sectPr.xpath('w:headerReference | w:footerReference'))
 
     def test_travel_names_are_separate_from_signature_and_promise(self):
         for material in self.materials:
@@ -84,6 +148,26 @@ class FormFieldsTests(unittest.TestCase):
             self.assertIn(f'乘车人{index + 1}姓名：', cell.text)
             self.assertNotIn('{{', cell.text)
             self.assertFalse(cell._tc.xpath('.//a:blip'))
+
+    def test_travel_pdf_keeps_signed_form_and_overflow_attachments(self):
+        materials = [self.materials[0]]
+        for index in range(6):
+            path = self.root / f'order{index}.png'
+            Image.new('RGB', (120, 600), (index, 0, 0)).save(path)
+            materials.append(Material(path.name, str(index), '.png', kind='购买记录', archived=str(path)))
+        details = {'category': '行程', 'purpose': '现场布置往返', 'passenger_name': '张三',
+                   'passenger_name_2': '李四', 'passenger_name_3': '王五'}
+        for key in ('signature_image', 'signature_image_2', 'signature_image_3'):
+            details[key] = str(self.signature)
+        pdf_path = build_pdf(Bundle('test', '打车费用', '35.80', materials), '01',
+                             self.root / 'travel.pdf', Settings(), details=details)
+        with pdfium.PdfDocument(pdf_path) as pdf:
+            self.assertEqual(len(pdf), 2)
+            with closing(pdf[0]) as first, closing(first.get_textpage()) as text:
+                self.assertIn('乘车人3姓名：王五', text.get_text_range())
+                self.assertIn('现场布置往返', text.get_text_range())
+            with closing(pdf[0]) as first, closing(pdf[1]) as second:
+                self.assertEqual(sum(len(list(page.get_objects(filter=[3]))) for page in (first, second)), 11)
 
     def make_scan(self, travel=False):
         source = self.root / 'input'
@@ -125,6 +209,34 @@ class FormFieldsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '签字图片不存在'):
             build(manifest, skip_pdf=True, person_defaults={'signature_image': str(self.root / 'missing.png')})
         self.assertFalse(any((self.root / '报销材料').iterdir()))
+
+    def test_detail_json_accepts_raw_and_escaped_windows_paths(self):
+        details = self.root / 'detail.json'
+        for spelling, expected in (
+            (r'D:\照片\template.docx', r'D:\照片\template.docx'),
+            (r'D:\new\temp.docx', r'D:\new\temp.docx'),
+            (r'D:\\照片\\template.docx', r'D:\照片\template.docx'),
+            (r'D:\\\u7167\u7247\\template.docx', r'D:\照片\template.docx'),
+            ('D:/照片/template.docx', 'D:/照片/template.docx'),
+            (r'\\server\share\template.docx', r'\\server\share\template.docx'),
+        ):
+            with self.subTest(spelling=spelling):
+                details.write_text('{"物品":{"template":"' + spelling + r'","purpose":"第一行\n第二行"}}',
+                                   encoding='utf-8-sig')
+                self.assertEqual(load_details(details, {})['物品'],
+                                 {'template': expected, 'purpose': '第一行\n第二行'})
+        details.write_text(r'{"物品":{"purpose":"保留错误\路径"}}', encoding='utf-8')
+        with self.assertRaises(json.JSONDecodeError):
+            load_details(details, {})
+
+    def test_detail_json_accepts_raw_windows_paths_in_signature_fields(self):
+        details = self.root / 'detail.json'
+        details.write_text(r'{"行程":{"signature_image":"签名\承诺.png",'
+                           r'"passengers":[{"signature_image":"new\test.png"}]}}', encoding='utf-8')
+        with patch('imss.details.validate_signature') as validate:
+            load_details(details, {})
+        self.assertEqual([call.args[0] for call in validate.call_args_list],
+                         [self.root / r'签名\承诺.png', self.root / r'new\test.png'])
 
     def test_visible_auto_group_details_and_invoice_override(self):
         manifest = self.make_scan(travel=True)

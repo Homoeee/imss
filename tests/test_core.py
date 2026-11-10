@@ -273,7 +273,7 @@ class FileTests(unittest.TestCase):
         self.assertFalse(report['pending'])
         self.assertEqual([value['sequence'] for value in report['generated']], ['00', '00', '01', '02'])
         output = Path(report['output'])
-        self.assertTrue((output / '01.打印纸_35.80.docx').is_file())
+        self.assertTrue((output / '01.打印纸_35.80元.docx').is_file())
         self.assertEqual({p.name for p in (output / '原始材料').glob('*元-*')},
                          {'01.打印纸-35.80元-电子发票.png', '01.打印纸-35.80元-购买记录.png'})
         self.assertTrue(all(not m['archived'] for m in report['materials'] if m['kind'] in ('审查表', '新闻稿', '情况说明')))
@@ -288,7 +288,7 @@ class FileTests(unittest.TestCase):
         # 重复生成读取同一张核对表，原件与输出布局保持不变。
         second = build(manifest, skip_pdf=True)
         self.assertFalse(second['pending'])
-        self.assertEqual({v['word'] for v in second['generated'] if v.get('word')}, {'01.打印纸_35.80.docx'})
+        self.assertEqual({v['word'] for v in second['generated'] if v.get('word')}, {'01.打印纸_35.80元.docx'})
         self.assertEqual({p.name for p in output.iterdir() if p.is_dir()}, {'原始材料'})
 
     def test_changes_after_scan_detected(self):
@@ -312,13 +312,14 @@ class FileTests(unittest.TestCase):
         for index, name in enumerate(texts):
             Image.new('RGB', (100 + index, 90), 'white').save(source / name)
         hashes = {name: digest_file(source / name) for name in texts}
-        with patch('imss.workflow.extract', side_effect=lambda path, ext, settings: (texts[path.name], [])), redirect_stdout(io.StringIO()):
+        with patch('imss.workflow.extract', side_effect=lambda path, ext, settings: (texts[path.name], [])), redirect_stdout(io.StringIO()) as stdout:
             self.assertEqual(main(['run', str(source), '--skip-pdf']), 0)
+            self.assertIn('报销总金额 35.80 元', stdout.getvalue())
             output = default_output(source)
             report_path = default_records(output) / '核对清单.json'
             report = json.loads(report_path.read_text(encoding='utf-8'))['report']
             self.assertEqual(Path(report['output']), output)
-            self.assertTrue((output / '01.打印纸_35.80.docx').is_file())
+            self.assertTrue((output / '01.打印纸_35.80元.docx').is_file())
             self.assertEqual(len(list((output / '原始材料').glob('*元-*'))), 2)
             self.assertEqual({p.name for p in output.iterdir() if p.is_dir()}, {'原始材料'})
             self.assertEqual({p.name for p in output.parent.iterdir()}, {'input', '报销材料', '核对清单'})

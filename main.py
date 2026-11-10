@@ -8,6 +8,7 @@ PASSENGER_NAME = ""   # 行程模板的第 1 位乘车人姓名；不同人员�
 
 
 import argparse
+from decimal import Decimal
 import json
 import logging
 from pathlib import Path
@@ -16,8 +17,8 @@ import sys
 from imss.output.documents import create_template
 from imss.recognition.extract import tesseract_path
 from imss.core.models import Settings
-from imss.runtime.office import run_process, soffice_path
-from imss.workflow import build, scan, sync_pdf_report, recheck, update_review
+from imss.runtime.process import run_process
+from imss.workflow import build, scan, recheck, update_review
 from imss.runtime.paths import tessdata_path
 from imss.output.workspace import default_output
 
@@ -45,16 +46,7 @@ def doctor(settings: Settings) -> bool:
     except Exception as exc:
         healthy = False
         print(f"[缺失] {exc}")
-    try:
-        path = soffice_path(settings)
-        result = run_process([path, "--headless", "--version"], 20)
-        if result.returncode:
-            raise RuntimeError("LibreOffice 无法运行")
-        print(f"[OK] LibreOffice: {path}")
-    except Exception as exc:
-        healthy = False
-        print(f"[缺失] {exc}")
-    print("处理过程完全离线；OCR 和 Office 仅使用项目 vendor 内组件。")
+    print("处理过程完全离线。PDF 由 ReportLab 直接生成。")
     return healthy
 
 
@@ -78,6 +70,7 @@ def main(argv=None, person_defaults=None):
         command.add_argument("--details", type=Path, help="分类或逐票补充信息；run 默认读取核对清单/detail.json")
         if name == "run":
             command.add_argument("--review", type=Path, help="应用已确认的核对清单（xlsx，兼容 CSV）")
+            command.add_argument("--is-prize", type=int, choices=(0, 1), help="0 非奖品，1 奖品；显式指定时覆盖 detail.json")
             command.add_argument("--skip-pdf", action="store_true")
             command.add_argument("--start", type=int, default=1, help="报销单连续整数编号起点，默认 01；审查表和新闻稿均为 00")
             command.add_argument("--signature-image", type=Path, help="承诺人签字图片；按比例插入模板签名栏")
@@ -91,6 +84,7 @@ def main(argv=None, person_defaults=None):
     command.add_argument("--template", type=Path)
     command.add_argument("--config", type=Path, help="覆盖扫描时的运行配置")
     command.add_argument("--details", type=Path, help="覆盖自动读取的核对清单/detail.json；支持发票类别或逐票字段")
+    command.add_argument("--is-prize", type=int, choices=(0, 1), help="0 非奖品，1 奖品；显式指定时覆盖 detail.json")
     command.add_argument("--skip-pdf", action="store_true")
     command.add_argument("--start", type=int, default=1, help="报销单连续整数编号起点，默认 01")
     command.add_argument("--signature-image", type=Path)
@@ -102,13 +96,10 @@ def main(argv=None, person_defaults=None):
     command.add_argument("--config", type=Path)
     command = sub.add_parser('review', help='按已有识别结果升级八列核对表并修复原件链接，不重跑OCR')
     command.add_argument('manifest', type=Path)
-    command = sub.add_parser("doctor", help="检查本地 OCR、中文模型和 LibreOffice")
+    command = sub.add_parser("doctor", help="检查本地 OCR 和语言模型")
     command.add_argument("--config", type=Path)
     command = sub.add_parser("init-template", help="生成可编辑的示例 .docx 模板")
     command.add_argument("path", type=Path)
-    command = sub.add_parser("export-pdf", help="补导出已有 Word，保留同名 PDF")
-    command.add_argument("directory", type=Path)
-    command.add_argument("--config", type=Path)
     args = parser.parse_args(argv)
     if not args.command:
         entered = input("请输入材料文件夹路径: ").strip().strip('"')
@@ -137,32 +128,6 @@ def main(argv=None, person_defaults=None):
             create_template(args.path)
             print(f"模板已生成: {args.path.resolve()}")
             return 0
-        if args.command == "export-pdf":
-            from imss.runtime.office import convert_office
-            if not args.directory.is_dir():
-                raise ValueError("目录不存在")
-            paths = sorted(args.directory.glob("*.docx"))
-            if not paths:
-                raise ValueError("目录没有 .docx 文件")
-            failed = 0
-            for path in paths:
-                if path.with_suffix(".pdf").exists():
-                    with path.with_suffix('.pdf').open('rb') as stream:
-                        valid = stream.read(5) == b'%PDF-'
-                    if valid:
-                        print(f"保留已有 PDF: {path.with_suffix('.pdf').name}")
-                    else:
-                        failed += 1
-                        print(f"[失败] 已有同名文件不是有效 PDF，请移走后重试: {path.with_suffix('.pdf').name}", file=sys.stderr)
-                    continue
-                try:
-                    convert_office(path, path.with_suffix(".pdf"), settings)
-                    print(f"已导出: {path.with_suffix('.pdf').name}")
-                except Exception as exc:
-                    failed += 1
-                    print(f"[失败] {path.name}: {exc}", file=sys.stderr)
-            sync_pdf_report(args.directory)
-            return 2 if failed else 0
         if args.command in ("scan", "run"):
             manifest = scan(args.input, default_output(args.input), settings, args.template)
             print(f"核对清单: {manifest.parent / '核对清单.xlsx'}")
@@ -180,10 +145,12 @@ def main(argv=None, person_defaults=None):
         report = build(manifest, review=getattr(args, "review", None), template=args.template,
                        skip_pdf=args.skip_pdf, start=args.start,
                        settings_override=settings if args.command == "build" and args.config else None,
-                       details_path=args.details, person_defaults=defaults)
+                       details_path=args.details, person_defaults=defaults, is_prize=args.is_prize)
         words = sum(bool(value.get('word')) for value in report['generated'])
         pdfs = sum(bool(value.get('pdf')) for value in report['generated'])
-        print(f"完成: Word {words} 份，PDF {pdfs} 份；{len(report['pending'])} 条待处理记录；输出: {report['output']}")
+        total = sum((Decimal(value['amount']) for value in report['generated'] if 'amount' in value), Decimal('0.00'))
+        print(f"完成: Word {words} 份，PDF {pdfs} 份；报销总金额 {total:.2f} 元；"
+              f"{len(report['pending'])} 条待处理记录；输出: {report['output']}")
         print(f"处理记录: {manifest.parent}；原输入文件保留。")
         for entry in report['pending']:
             print('[待处理] ' + str(entry.get('source') or entry.get('group')) + '：' + '；'.join(entry['issues']))

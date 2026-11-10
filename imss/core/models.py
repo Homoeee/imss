@@ -9,6 +9,7 @@ KINDS = ("电子发票", "购买记录", "行程单", "运单明细", "购买清
 STANDALONE_SHEETS = ("签领表", "签到表")
 SPECIALS = ("审查表", "新闻稿", "情况说明")
 MATERIALS = ("电子发票", "行程单", "运单明细", "购买记录", "购买清单", "签领表", "承诺书")
+MEAL_NAMES = ("工作餐", "午餐", "晚餐", "餐费")
 
 
 def money(value: str) -> str:
@@ -83,11 +84,8 @@ class Settings:
     tesseract: str = ""
     tessdata: str = ""
     languages: str = "chi_sim+eng"
-    soffice: str = ""
-    office_backend: str = "libreoffice"
     dpi: int = 180
     ocr_timeout: int = 120
-    office_timeout: int = 180
     max_pages: int = 100
     max_pixels: int = 40_000_000
     ocr_min_chars: int = 20
@@ -95,20 +93,21 @@ class Settings:
 
     @classmethod
     def from_dict(cls, values):
+        # Scan manifests and config files from older versions can still be read.
+        values = {key: value for key, value in values.items()
+                  if key not in ('soffice', 'office_backend', 'office_timeout')}
         unknown = set(values) - set(cls.__dataclass_fields__)
         if unknown:
             raise ValueError(f"未知配置项: {', '.join(sorted(unknown))}")
         result = cls(**values)
-        for key in ("dpi", "ocr_timeout", "office_timeout", "max_pages", "max_pixels", "ocr_min_chars", "workers"):
+        for key in ("dpi", "ocr_timeout", "max_pages", "max_pixels", "ocr_min_chars", "workers"):
             if type(getattr(result, key)) is not int or getattr(result, key) <= 0:
                 raise ValueError(f"{key} 必须是正整数")
         if result.workers > 8:
             raise ValueError("workers 最多为 8")
-        for key in ("tesseract", "tessdata", "languages", "soffice", "office_backend"):
+        for key in ("tesseract", "tessdata", "languages"):
             if not isinstance(getattr(result, key), str):
                 raise ValueError(f"{key} 必须是字符串")
-        if result.office_backend not in ("auto", "libreoffice"):
-            raise ValueError("office_backend 应为 libreoffice 或 auto，均使用项目内 LibreOffice")
         return result
 
 
