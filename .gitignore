@@ -16,6 +16,4 @@ dist/
 /tests/完整输出/
 /tests/完整输出_处理记录/
 /tests/完整输出-*/
-/vendor/*
-!/vendor/README.md
-!/vendor/SOURCES.json
+
